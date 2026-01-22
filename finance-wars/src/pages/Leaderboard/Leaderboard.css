@@ -1,0 +1,17 @@
+.leaderboard-page {
+  padding: 40px;
+  min-height: 100vh;
+  background-color: #020617;
+}
+
+.leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.leaderboard-table th,
+.leaderboard-table td {
+  padding: 12px;
+  border-bottom: 1px solid #1e293b;
+  text-align: center;
+}

@@ -1,0 +1,32 @@
+.news-page {
+  padding: 40px;
+  min-height: 100vh;
+  background-color: #020617;
+}
+
+.news-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.news-card {
+  background-color: #0f172a;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+.news-card h3 {
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
+
+.news-card p {
+  font-size: 0.9rem;
+  color: #9ca3af;
+}
+
+.news-card a {
+  color: #22c55e;
+  font-size: 0.9rem;
+}
