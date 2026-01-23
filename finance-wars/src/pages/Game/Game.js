@@ -7,6 +7,8 @@ import { saveUserData, loadUserData } from "../../firebase/realtimeDb";
 import { updateLeaderboard } from "../../firebase/leaderboardDb";
 import CandlestickChart from "../../components/CandlestickChart";
 import StockAnalysisModal from "../../components/StockAnalysisModal";
+import { getTechnicalAnalysis } from "../../logic/technicalAnalysis";
+import { calculateSMA, calculateRSI } from "../../logic/technicalAnalysis";
 
 
 function Game() {
@@ -175,6 +177,69 @@ useEffect(() => {
   return () => clearInterval(interval);
 }, [selectedStock]);
 
+/* =======================
+   📊 TECHNICAL ANALYSIS
+   ======================= */
+const [technicalAnalysis, setTechnicalAnalysis] = useState({});
+
+useEffect(() => {
+  if (selectedStock && priceHistory[selectedStock.id] && priceHistory[selectedStock.id].length > 0) {
+    const prices = priceHistory[selectedStock.id].map(candle => candle.close);
+    const analysis = getTechnicalAnalysis(prices);
+    
+    setTechnicalAnalysis(prev => ({
+      ...prev,
+      [selectedStock.id]: analysis
+    }));
+  }
+}, [selectedStock, priceHistory]);
+
+/* =======================
+   ⚖️ RISK MANAGEMENT
+   ======================= */
+const calculateRiskMetrics = (stockId) => {
+  const stock = stocks.find(s => s.id === stockId);
+  const portfolioItem = portfolio.find(p => p.id === stockId);
+  
+  if (!stock || !portfolioItem) return null;
+  
+  const currentValue = stock.price * portfolioItem.quantity;
+  const costBasis = portfolioItem.buyPrice * portfolioItem.quantity;
+  const profitLoss = currentValue - costBasis;
+  const profitLossPercent = (profitLoss / costBasis) * 100;
+  
+  // Calculate position size risk
+  const positionSizePercent = (currentValue / portfolioValue) * 100;
+  
+  // Calculate volatility risk based on recent price movements
+  let volatilityRisk = 0;
+  if (priceHistory[stockId] && priceHistory[stockId].length > 10) {
+    const recentPrices = priceHistory[stockId].slice(-10).map(c => c.close);
+    const avg = recentPrices.reduce((a, b) => a + b, 0) / recentPrices.length;
+    const squaredDiffs = recentPrices.map(price => Math.pow(price - avg, 2));
+    const variance = squaredDiffs.reduce((a, b) => a + b, 0) / squaredDiffs.length;
+    const volatility = Math.sqrt(variance);
+    volatilityRisk = (volatility / avg) * 100; // Coefficient of variation
+  }
+  
+  // Determine risk level
+  let riskLevel = 'low';
+  if (positionSizePercent > 15 || volatilityRisk > 5 || Math.abs(profitLossPercent) > 15) {
+    riskLevel = 'high';
+  } else if (positionSizePercent > 10 || volatilityRisk > 3 || Math.abs(profitLossPercent) > 10) {
+    riskLevel = 'medium';
+  }
+  
+  return {
+    positionSizePercent,
+    volatilityRisk,
+    profitLossPercent,
+    riskLevel,
+    currentValue,
+    costBasis
+  };
+};
+
 
 
 
@@ -328,31 +393,231 @@ useEffect(() => {
     return "Select a stock first so I can guide you better 📊";
   }
 
+  // Calculate portfolio concentration
+  const selectedStockInPortfolio = portfolio.find(p => p.id === selectedStock.id);
+  let portfolioConcentration = 0;
+  if (selectedStockInPortfolio) {
+    const stockValue = selectedStockInPortfolio.quantity * selectedStockInPortfolio.buyPrice;
+    portfolioConcentration = (stockValue / portfolioValue) * 100;
+  }
+
+  // Calculate overall win rate
+  let winningPositions = 0;
+  let totalPositions = portfolio.length;
+  portfolio.forEach(position => {
+    const liveStock = stocks.find(s => s.id === position.id);
+    const currentPrice = liveStock ? liveStock.price : position.buyPrice;
+    if ((currentPrice - position.buyPrice) * position.quantity > 0) {
+      winningPositions++;
+    }
+  });
+  const winRate = totalPositions > 0 ? (winningPositions / totalPositions) * 100 : 0;
+
   if (text.includes("buy")) {
     if (overallProfitLoss < 0) {
       return learningMode === "beginner"
-        ? "You are already in loss. Avoid buying emotionally. Wait for confirmation."
-        : "Consider risk-reward before adding to a losing position.";
+        ? `You are already in loss. Avoid buying emotionally. Wait for confirmation. Current win rate: ${winRate.toFixed(1)}%.`
+        : portfolioConcentration > 30
+          ? `High concentration in this stock (${portfolioConcentration.toFixed(1)}%). Consider diversification before adding more.`
+          : `Consider risk-reward before adding to a losing position. Your win rate is ${winRate.toFixed(1)}%.`;
     }
-    return "Price looks stable. Consider buying only if volume supports it.";
+    
+    // Check if selected stock is overvalued based on volatility
+    const priceChangePercent = Math.abs(((selectedStock.price - (selectedStockInPortfolio ? selectedStockInPortfolio.buyPrice : selectedStock.price)) / (selectedStockInPortfolio ? selectedStockInPortfolio.buyPrice : selectedStock.price)) * 100);
+    
+    // Include technical analysis if available
+    const currentTechnicalAnalysis = selectedStock && technicalAnalysis[selectedStock.id] ? technicalAnalysis[selectedStock.id] : null;
+    let technicalAdvice = "";
+    if (currentTechnicalAnalysis && currentTechnicalAnalysis.trend !== 'insufficient_data') {
+      technicalAdvice = ` Technical indicators show: ${currentTechnicalAnalysis.trend} trend, RSI: ${currentTechnicalAnalysis.rsi || 'N/A'}.`;
+    }
+    
+    // Risk management checks
+    const riskMetrics = selectedStockInPortfolio ? calculateRiskMetrics(selectedStock.id) : null;
+    let riskAdvice = "";
+    if (riskMetrics) {
+      if (riskMetrics.riskLevel === 'high') {
+        riskAdvice = ` Risk alert: This position is high-risk due to ${riskMetrics.positionSizePercent > 15 ? 'large position size' : riskMetrics.volatilityRisk > 5 ? 'high volatility' : 'large profit/loss swing'}. Consider reducing exposure.`;
+      } else if (riskMetrics.riskLevel === 'medium') {
+        riskAdvice = ` Note: This position has medium risk. Monitor closely.`;
+      }
+    }
+    
+    if (portfolioConcentration > 40) {
+      return `⚠️ High concentration alert! You already own ${portfolioConcentration.toFixed(1)}% of your portfolio in this stock. Consider diversifying to reduce risk.${technicalAdvice}${riskAdvice}`;
+    }
+    
+    if (priceChangePercent > 10) {
+      return `Price has moved ${priceChangePercent.toFixed(1)}% recently. Consider the fundamentals before buying.${technicalAdvice}${riskAdvice}`;
+    }
+    
+    // Additional technical checks
+    if (currentTechnicalAnalysis && currentTechnicalAnalysis.rsi) {
+      const rsi = parseFloat(currentTechnicalAnalysis.rsi);
+      if (rsi > 70) {
+        return `RSI shows stock is overbought (${rsi}). Consider waiting for a pullback before buying.${technicalAdvice}${riskAdvice}`;
+      } else if (rsi < 30) {
+        return `RSI shows stock is oversold (${rsi}). Potential buying opportunity, but confirm with fundamentals.${technicalAdvice}${riskAdvice}`;
+      }
+    }
+    
+    return `Price looks stable. Consider buying only if volume supports it, fundamentals are strong, technicals align, and risk is managed.${technicalAdvice}${riskAdvice}`;
   }
 
   if (text.includes("sell")) {
     if (overallProfitLoss > 0) {
+      if (selectedStockInPortfolio) {
+        const profitPercent = ((selectedStock.price - selectedStockInPortfolio.buyPrice) / selectedStockInPortfolio.buyPrice) * 100;
+        if (profitPercent > 15) {
+          return `Great profit of ${profitPercent.toFixed(1)}%! Consider booking partial profits to secure gains. Rule of thumb: Take 30-50% off the table.`;
+        } else if (profitPercent > 8) {
+          return `Healthy profit of ${profitPercent.toFixed(1)}%. Consider booking partial profits at 15%+ to protect gains.`;
+        }
+      }
       return "You are in profit. Booking partial profit is a smart move 👍";
     }
-    return "Selling now may lock losses. Check trend strength.";
+    
+    if (selectedStockInPortfolio) {
+      const lossPercent = ((selectedStockInPortfolio.buyPrice - selectedStock.price) / selectedStockInPortfolio.buyPrice) * 100;
+      if (lossPercent > 10) {
+        // Include technical analysis if available
+        const currentTechnicalAnalysis = selectedStock && technicalAnalysis[selectedStock.id] ? technicalAnalysis[selectedStock.id] : null;
+        let technicalAdvice = "";
+        if (currentTechnicalAnalysis && currentTechnicalAnalysis.trend !== 'insufficient_data') {
+          technicalAdvice = ` Technical indicators show: ${currentTechnicalAnalysis.trend} trend, RSI: ${currentTechnicalAnalysis.rsi || 'N/A'}.`;
+        }
+            
+        // Risk management checks
+        const riskMetrics = selectedStockInPortfolio ? calculateRiskMetrics(selectedStock.id) : null;
+        let riskAdvice = "";
+        if (riskMetrics && riskMetrics.riskLevel === 'high') {
+          riskAdvice = ` Risk alert: This position is high-risk. Consider exiting completely or setting tight stop-loss.`;
+        }
+            
+        return `Significant loss of ${lossPercent.toFixed(1)}%. Consider stop-loss at 15% or reassess fundamentals.${technicalAdvice}${riskAdvice} Don't let temporary losses become permanent.`;
+      }
+    }
+    
+    // Include technical analysis in general sell advice
+    const currentTechnicalAnalysis = selectedStock && technicalAnalysis[selectedStock.id] ? technicalAnalysis[selectedStock.id] : null;
+    let technicalAdvice = "";
+    if (currentTechnicalAnalysis && currentTechnicalAnalysis.trend !== 'insufficient_data') {
+      technicalAdvice = ` Technical indicators suggest: ${currentTechnicalAnalysis.trend} trend, RSI: ${currentTechnicalAnalysis.rsi || 'N/A'}.`;
+    }
+    
+    // Risk management checks
+    const riskMetrics = selectedStockInPortfolio ? calculateRiskMetrics(selectedStock.id) : null;
+    let riskAdvice = "";
+    if (riskMetrics && riskMetrics.riskLevel === 'high') {
+      riskAdvice = ` Risk alert: This position is high-risk. Consider exiting to preserve capital.`;
+    }
+    
+    return `Selling now may lock losses. Check trend strength and fundamentals before deciding.${technicalAdvice}${riskAdvice}`;
   }
 
   if (text.includes("loss")) {
+    if (overallProfitLoss < 0) {
+      const lossPercent = Math.abs((overallProfitLoss / 100000) * 100);
+      return lossPercent > 10
+        ? `Significant portfolio loss of ${lossPercent.toFixed(1)}%. Consider reducing position sizes and focusing on preservation of capital. Take a break if emotions are high.`
+        : "Losses are part of trading. Focus on discipline, not recovery trades. Stick to your strategy.";
+    }
     return "Losses are part of trading. Focus on discipline, not recovery trades.";
   }
 
   if (text.includes("profit")) {
+    if (overallProfitLoss > 0) {
+      const profitPercent = (overallProfitLoss / 100000) * 100;
+      
+      // Count profitable positions
+      let profitablePositions = 0;
+      portfolio.forEach(p => {
+        const liveStock = stocks.find(s => s.id === p.id);
+        const currentPrice = liveStock ? liveStock.price : p.buyPrice;
+        if ((currentPrice - p.buyPrice) * p.quantity > 0) profitablePositions++;
+      });
+          
+      // Check for overconcentration in profitable stocks
+      let overConcentratedStocks = 0;
+      portfolio.forEach(p => {
+        const liveStock = stocks.find(s => s.id === p.id);
+        const currentPrice = liveStock ? liveStock.price : p.buyPrice;
+        const stockValue = currentPrice * p.quantity;
+        const positionSize = (stockValue / portfolioValue) * 100;
+        if (positionSize > 20) overConcentratedStocks++;
+      });
+          
+      return profitPercent > 15
+        ? `Excellent performance! ${profitPercent.toFixed(1)}% gain. You have ${profitablePositions} profitable positions with ${overConcentratedStocks} over-concentrated stocks. Time to book some profits and reduce position sizes to preserve gains.`
+        : `Great job! You have ${profitablePositions} profitable positions. Protect profits using stop-loss or partial booking. Consider taking profits at 15-20% if over-concentrated.`;
+    }
     return "Protect profits using stop-loss or partial booking.";
   }
 
-  return "Good question 🤔 Focus on trend, risk management, and patience.";
+  // Enhanced general responses
+  if (text.includes("risk") || text.includes("safe") || text.includes("secure")) {
+    // Calculate overall portfolio risk
+    const maxConcentration = portfolio.length > 0 ? Math.max(...portfolio.map(p => {
+      const stockVal = p.quantity * (stocks.find(s => s.id === p.id)?.price || p.buyPrice);
+      return (stockVal / portfolioValue) * 100;
+    })) : 0;
+    
+    // Count high-risk positions
+    let highRiskPositions = 0;
+    portfolio.forEach(p => {
+      const riskMetrics = calculateRiskMetrics(p.id);
+      if (riskMetrics && riskMetrics.riskLevel === 'high') highRiskPositions++;
+    });
+    
+    return `Your portfolio has ${totalPositions} positions with a win rate of ${winRate.toFixed(1)}%. You have ${highRiskPositions} high-risk positions. Aim to keep no more than 10-15% in any single stock. Current max concentration: ${maxConcentration.toFixed(1)}% in one stock. Consider rebalancing to reduce risk.`;
+  }
+
+  if (text.includes("diversif") || text.includes("spread")) {
+    const sectors = [...new Set(portfolio.map(p => p.sector))];
+    return `You're invested in ${sectors.length} sectors: ${sectors.join(', ')}. Good diversification includes different sectors and market caps. Consider spreading across 4-6 sectors for optimal diversification.`;
+  }
+
+  if (text.includes("hold") || text.includes("keep")) {
+    if (selectedStockInPortfolio) {
+      const holdingPeriod = ((selectedStock.price - selectedStockInPortfolio.buyPrice) / selectedStockInPortfolio.buyPrice) * 100;
+      return holdingPeriod > 5
+        ? `Positive holding of ${holdingPeriod.toFixed(1)}%. Consider your investment timeline and rebalance if allocation gets too high.`
+        : `Monitor closely. If fundamentals remain strong, holding is fine. Otherwise, consider repositioning.`;
+    }
+  }
+
+  // New question categories
+  if (text.includes("fundament") || text.includes("balance sheet") || text.includes("eps") || text.includes("pe ratio") || text.includes("debt")) {
+    return `For fundamental analysis, check the company's quarterly results, debt-to-equity ratio, promoter holdings, and revenue growth. The P/E ratio compared to industry peers is crucial. Currently, focus on quality businesses with strong fundamentals.`;
+  }
+
+  if (text.includes("stop loss") || text.includes("stoploss") || text.includes("protect") || text.includes("limit")) {
+    return `Set stop-loss at 7-10% for beginners, 12-15% for advanced traders. Never risk more than 2% of your portfolio on a single trade. Consider trailing stops to protect profits while letting winners run.`;
+  }
+
+  if (text.includes("volume") || text.includes("high") || text.includes("low")) {
+    return `Volume confirms price movements. High volume with price increases suggests strong buying interest. Look for volume spikes during breakouts or breakdowns for confirmation.`;
+  }
+
+  if (text.includes("when") && (text.includes("buy") || text.includes("sell"))) {
+    return `Timing the market is difficult. Use technical indicators like RSI, moving averages, and support/resistance levels. For buying: look for pullbacks to support with volume. For selling: consider booking profits at resistance levels.`;
+  }
+
+  if (text.includes("best") && (text.includes("strategy") || text.includes("approach") || text.includes("way"))) {
+    return `Best practices: 1) Diversify across sectors (4-6), 2) Limit single stock to 10-15% of portfolio, 3) Use stop-loss orders, 4) Book partial profits at 15-20%, 5) Focus on quality businesses with sustainable moats.`;
+  }
+
+  if (text.includes("market") || text.includes("trend") || text.includes("direction")) {
+    const currentTechnicalAnalysis = selectedStock && technicalAnalysis[selectedStock.id] ? technicalAnalysis[selectedStock.id] : null;
+    let techAdvice = currentTechnicalAnalysis && currentTechnicalAnalysis.trend !== 'insufficient_data' 
+      ? `Technical trend for ${selectedStock.name}: ${currentTechnicalAnalysis.trend}. ` 
+      : '';
+    return `${techAdvice}Focus on identifying primary trends. In uptrends, look for buying opportunities on corrections. In downtrends, wait for reversals or avoid catching falling knives.`;
+  }
+
+  // For general questions that don't match specific keywords, use the AI backend
+  // This will provide more varied and intelligent responses
+  return null; // Return null to indicate that we should use the AI backend
 };
 
 
@@ -368,40 +633,52 @@ useEffect(() => {
   const userInput = mentorInput;
   setMentorInput(""); // Clear input
 
-  try {
-    const res = await fetch("http://localhost:5000/mentor-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: userInput,
-        context: {
-          learningMode,
-          pnl: overallProfitLoss,
-          stock: selectedStock?.name
-        }
-      })
-    });
-
-    if (!res.ok) throw new Error("Network error");
-    
-    const data = await res.json();
-    
-    // Add AI response
+  // First, try to get a response from the local mentor logic
+  const localResponse = getMentorReply(userInput);
+  
+  if (localResponse !== null) {
+    // Use the local response if available
     setMentorMessages(prev => [
       ...prev,
-      { from: "mentor", text: data.reply }
+      { from: "mentor", text: localResponse }
     ]);
-  } catch (err) {
-    // Fallback message if API fails
-    setTimeout(() => {
+  } else {
+    // If local logic returns null, use the AI backend
+    try {
+      const res = await fetch("http://localhost:5000/mentor-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userInput,
+          context: {
+            learningMode,
+            pnl: overallProfitLoss,
+            stock: selectedStock?.name
+          }
+        })
+      });
+
+      if (!res.ok) throw new Error("Network error");
+      
+      const data = await res.json();
+      
+      // Add AI response
       setMentorMessages(prev => [
         ...prev,
-        { 
-          from: "mentor", 
-          text: `I'm here to help! Based on your ${learningMode} level and ₹${overallProfitLoss} P/L, focus on risk management and check the 5-year chart for trends.` 
-        }
+        { from: "mentor", text: data.reply }
       ]);
-    }, 500);
+    } catch (err) {
+      // Fallback message if API fails
+      setTimeout(() => {
+        setMentorMessages(prev => [
+          ...prev,
+          { 
+            from: "mentor", 
+            text: `I'm here to help! Based on your ${learningMode} level and ₹${overallProfitLoss} P/L, focus on risk management and check the 5-year chart for trends.` 
+          }
+        ]);
+      }, 500);
+    }
   }
 };
 
@@ -448,9 +725,6 @@ useEffect(() => {
       <div className="chart-layout">
   {/* LEFT: CHART */}
   <div className="chart-area">
-    {/*selectedStock && priceHistory[selectedStock.id] && (
-      <CandlestickChart data={priceHistory[selectedStock.id]} />
-    )*/}
     {selectedStock && (
   <>
     <p style={{ color: "white" }}>

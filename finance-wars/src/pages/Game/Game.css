@@ -460,8 +460,8 @@ background: linear-gradient(135deg, #020617, #0f172a);
   border-radius: 6px;
 }
 .chart-area {
-  height: 350px;
-  min-height:300px;
+  height: 500px;
+  min-height:400px;
   padding: 12px;
 }
 

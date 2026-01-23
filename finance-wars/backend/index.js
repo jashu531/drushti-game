@@ -237,23 +237,35 @@ app.post("/mentor-chat", async (req, res) => {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
     const prompt = `
-You are a professional stock market mentor for Indian stock market traders.
+You are a professional stock market mentor for Indian stock market traders with expertise in technical analysis, fundamental analysis, and risk management.
 
 User details:
 - Learning mode: ${context.learningMode}
 - Profit/Loss: ₹${context.pnl}
+- Portfolio value: ₹${(100000 + context.pnl).toFixed(0)}
 - Selected stock: ${context.stock || "None"}
 
 User question:
 "${message}"
 
-Rules:
+Advanced Analysis Requirements:
+- If discussing buy/sell decisions, analyze risk vs reward
+- Consider portfolio concentration effects
+- Suggest position sizing based on risk tolerance
+- Factor in market volatility and sector rotation
+- Recommend stop-loss and profit booking strategies
+- Assess overall portfolio balance and diversification
+
+Response Guidelines:
 - Be friendly and human
 - No financial guarantees
 - Practical advice only for Indian stock market
 - Beginner friendly if learning mode is beginner
 - Focus on risk management and discipline
 - Provide actionable insights
+- Include specific percentages and amounts when relevant
+- Mention fundamental factors affecting the stock if known
+- Consider market timing and economic cycles
 `;
 
     const result = await model.generateContent(prompt);
@@ -263,19 +275,40 @@ Rules:
   } catch (error) {
     console.error("Gemini error:", error);
     // Fallback response when AI fails
-    const fallbackReply = `I'm currently unable to access advanced AI analysis. Here's my guidance based on your situation:
+    const portfolioValue = 100000 + context.pnl;
+    const fallbackReply = `I'm currently unable to access advanced AI analysis. Here's my comprehensive guidance based on your situation:
 
 • Learning Mode: ${context.learningMode}
+• Portfolio Value: ₹${portfolioValue.toFixed(0)}
 • P/L: ₹${context.pnl}
-• Stock: ${context.stock || "Not selected"}
+• P/L Percentage: ${((context.pnl / 100000) * 100).toFixed(2)}%
+• Selected Stock: ${context.stock || "Not selected"}
 
-For better decisions:
-1. Check the 5-year chart for trends
-2. Monitor support/resistance levels
-3. Set stop-loss at 5-10% for beginners
-4. Book partial profits at 15-20% gains
+Risk Management:
+1. Limit any single stock to 5-10% of portfolio
+2. Set stop-loss at 7-10% for beginners, 12-15% for advanced
+3. Book partial profits at 15-20% gains
+4. Never invest more than 2% of portfolio on speculative trades
 
-Risk management is key to long-term success! 📈`;
+Technical Analysis:
+• Check 5-year chart for long-term trends
+• Monitor support/resistance levels
+• Look for volume confirmation
+• Consider RSI and MACD indicators
+
+Fundamental Analysis:
+• Evaluate company's quarterly results
+• Check debt-to-equity ratios
+• Monitor promoter holdings
+• Review industry growth prospects
+
+Strategy Tips:
+• Diversify across 4-6 sectors
+• Maintain cash reserves of 10-15%
+• Focus on quality over quantity
+• Keep emotions in check during market volatility
+
+Remember: Successful investing requires patience, discipline, and continuous learning! 📈`;
     
     res.json({ reply: fallbackReply });
   }
